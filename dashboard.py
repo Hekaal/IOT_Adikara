@@ -79,7 +79,7 @@ def get_sensor_history(hours: int = 24):
 
     rows = supabase_select(
         "sensor_log",
-        df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ),
+        select="id,ts,temperature,humidity,soil,pump_status",
         params={
             "ts": f"gte.{since}",
             "order": "ts.asc",
@@ -91,12 +91,18 @@ def get_sensor_history(hours: int = 24):
     if df.empty:
         return df
 
+    # konversi timestamp
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
 
+    # pastikan numeric
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    # urutkan waktu (aman untuk plot)
+    df = df.sort_values("ts")
+
     return df
+
 
 
 # =========================================================
