@@ -5,12 +5,13 @@ import requests
 import pandas as pd
 import streamlit as st
 import paho.mqtt.client as mqtt
+from streamlit_autorefresh import st_autorefresh
 
 # =========================================================
 # CONFIG (Streamlit Secrets ONLY)
 # =========================================================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").strip()
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # disarankan ANON key
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()
 
 MQTT_BROKER = st.secrets.get("MQTT_BROKER", "").strip()
 MQTT_PORT   = int(st.secrets.get("MQTT_PORT", 8883))
@@ -22,17 +23,20 @@ TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd
 JAKARTA_TZ = timezone(timedelta(hours=7))
 
 # =========================================================
-# GUARD
+# PAGE
 # =========================================================
 st.set_page_config(page_title="Adikara IoT Dashboard", layout="wide")
-st.title("Adikara IoT - Dashboard Sensor")
+st.title("Adikara IoT - Dashboard Sensor (Realtime)")
 
+# =========================================================
+# GUARD
+# =========================================================
 if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
     st.error("SUPABASE_URL kosong/tidak valid. Isi di Streamlit Cloud → Settings → Secrets.")
     st.stop()
 
 if not SUPABASE_KEY:
-    st.error("SUPABASE_KEY kosong. Isi di Secrets. Disarankan pakai ANON key (bukan sb_secret/service role).")
+    st.error("SUPABASE_KEY kosong. Isi di Secrets.")
     st.stop()
 
 MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
@@ -53,17 +57,12 @@ def supabase_select(table: str, select="*", params=None):
     if params:
         q.update(params)
 
-    try:
-        r = requests.get(url, headers=sb_headers(), params=q, timeout=20)
-    except Exception as e:
-        raise RuntimeError(f"Request error ke Supabase: {e}")
-
+    r = requests.get(url, headers=sb_headers(), params=q, timeout=20)
     if not r.ok:
         raise RuntimeError(f"Supabase HTTP {r.status_code}: {r.text}")
-
     return r.json()
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=3)
 def get_latest_sensor():
     rows = supabase_select(
         "sensor_log",
@@ -72,7 +71,7 @@ def get_latest_sensor():
     )
     return rows[0] if rows else None
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=6)
 def get_sensor_history(hours: int = 24):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
@@ -91,15 +90,13 @@ def get_sensor_history(hours: int = 24):
         return df
 
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
-
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = df.sort_values("ts")
-    return df
+    return df.sort_values("ts")
 
 # =========================================================
-# MQTT PUBLISH HELPER
+# MQTT PUBLISH
 # =========================================================
 def mqtt_publish_pump(cmd: str):
     if not MQTT_OK:
@@ -120,19 +117,23 @@ def mqtt_publish_pump(cmd: str):
     client.disconnect()
 
 # =========================================================
-# SIDEBAR
+# SIDEBAR CONTROLS
 # =========================================================
 with st.sidebar:
-    st.header("Pengaturan")
-    auto_refresh = st.toggle("Auto refresh", value=True)
-    refresh_sec = st.slider("Interval refresh (detik)", 2, 30, 5)
-    hist_hours = st.slider("Rentang histori sensor (jam)", 1, 168, 24)
+    st.header("Realtime & Filter")
+    realtime = st.toggle("Realtime ON", value=True)
+    refresh_sec = st.slider("Update tiap (detik)", 2, 30, 5)
+    hist_hours = st.slider("Rentang histori (jam)", 1, 168, 24)
+
+    st.divider()
+    if st.button("🔄 Refresh Sekarang", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
     st.divider()
     st.subheader("Kontrol Pompa (MQTT)")
-
     if not MQTT_OK:
-        st.warning("MQTT belum dikonfigurasi. Kontrol pompa dimatikan (dashboard tetap jalan).")
+        st.warning("MQTT belum dikonfigurasi. Kontrol pompa dimatikan.")
     else:
         col_a, col_b, col_c = st.columns(3)
         if col_a.button("ON", use_container_width=True):
@@ -156,8 +157,11 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Gagal publish AUTO: {e}")
 
-if auto_refresh:
-    st.markdown(f"<meta http-equiv='refresh' content='{refresh_sec}'>", unsafe_allow_html=True)
+# =========================================================
+# REALTIME LOOP (smooth rerun)
+# =========================================================
+if realtime:
+    st_autorefresh(interval=refresh_sec * 1000, key="sensor_autorefresh")
 
 # =========================================================
 # KPI
@@ -178,7 +182,7 @@ if latest:
     k4.metric("Pompa", latest.get("pump_status", "--"))
     k5.metric("Update Terakhir (WIB)", ts_last.strftime("%Y-%m-%d %H:%M:%S"))
 else:
-    k5.info("Belum ada data di sensor_log atau akses Supabase masih bermasalah.")
+    k5.info("Belum ada data di sensor_log atau akses Supabase bermasalah.")
 
 st.divider()
 
@@ -192,10 +196,9 @@ with left:
     try:
         df_s = get_sensor_history(hist_hours)
         if df_s.empty:
-            st.info("Data histori sensor kosong (atau query tidak dapat akses).")
+            st.info("Data histori sensor kosong.")
         else:
             df_plot = df_s.set_index("ts")
-
             st.line_chart(df_plot[["temperature"]])
             st.line_chart(df_plot[["humidity"]])
             st.line_chart(df_plot[["soil"]])
