@@ -173,7 +173,7 @@ except Exception as e:
 k1, k2, k3, k4, k5 = st.columns([1, 1, 1, 1, 2])
 
 if latest:
-    ts = pd.to_datetime(latest["created_at"], utc=True).tz_convert(JAKARTA_TZ)
+    ts = pd.to_datetime(latest["ts"], utc=True).tz_convert(JAKARTA_TZ)
     k1.metric("Suhu (C)", latest.get("temperature", "--"))
     k2.metric("Kelembaban (%)", latest.get("humidity", "--"))
     k3.metric("Kelembaban Tanah (%)", latest.get("soil", "--"))
