@@ -38,7 +38,7 @@ if not SUPABASE_KEY:
 MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
 
 # =========================================================
-# SUPABASE REST HELPERS (lebih informatif kalau error)
+# SUPABASE REST HELPERS
 # =========================================================
 def sb_headers():
     return {
@@ -59,7 +59,6 @@ def supabase_select(table: str, select="*", params=None):
         raise RuntimeError(f"Request error ke Supabase: {e}")
 
     if not r.ok:
-        # Biar kamu langsung tau: 401/403 (RLS), 404 (table), dll.
         raise RuntimeError(f"Supabase HTTP {r.status_code}: {r.text}")
 
     return r.json()
@@ -91,19 +90,13 @@ def get_sensor_history(hours: int = 24):
     if df.empty:
         return df
 
-    # konversi timestamp
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
 
-    # pastikan numeric
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # urutkan waktu (aman untuk plot)
     df = df.sort_values("ts")
-
     return df
-
-
 
 # =========================================================
 # MQTT PUBLISH HELPER
@@ -114,7 +107,7 @@ def mqtt_publish_pump(cmd: str):
 
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.tls_set()  # HiveMQ Cloud TLS
+    client.tls_set()
 
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=30)
     client.loop_start()
@@ -163,12 +156,11 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Gagal publish AUTO: {e}")
 
-# Auto refresh
 if auto_refresh:
     st.markdown(f"<meta http-equiv='refresh' content='{refresh_sec}'>", unsafe_allow_html=True)
 
 # =========================================================
-# MAIN: KPI
+# KPI
 # =========================================================
 latest = None
 try:
@@ -179,12 +171,12 @@ except Exception as e:
 k1, k2, k3, k4, k5 = st.columns([1, 1, 1, 1, 2])
 
 if latest:
-    ts = pd.to_datetime(latest["ts"], utc=True).tz_convert(JAKARTA_TZ)
+    ts_last = pd.to_datetime(latest["ts"], utc=True).tz_convert(JAKARTA_TZ)
     k1.metric("Suhu (C)", latest.get("temperature", "--"))
     k2.metric("Kelembaban (%)", latest.get("humidity", "--"))
     k3.metric("Kelembaban Tanah (%)", latest.get("soil", "--"))
     k4.metric("Pompa", latest.get("pump_status", "--"))
-    k5.metric("Update Terakhir (WIB)", ts.strftime("%Y-%m-%d %H:%M:%S"))
+    k5.metric("Update Terakhir (WIB)", ts_last.strftime("%Y-%m-%d %H:%M:%S"))
 else:
     k5.info("Belum ada data di sensor_log atau akses Supabase masih bermasalah.")
 
@@ -202,9 +194,11 @@ with left:
         if df_s.empty:
             st.info("Data histori sensor kosong (atau query tidak dapat akses).")
         else:
-            st.line_chart(df_s.set_index("created_at")[["temperature"]])
-            st.line_chart(df_s.set_index("created_at")[["humidity"]])
-            st.line_chart(df_s.set_index("created_at")[["soil"]])
+            df_plot = df_s.set_index("ts")
+
+            st.line_chart(df_plot[["temperature"]])
+            st.line_chart(df_plot[["humidity"]])
+            st.line_chart(df_plot[["soil"]])
 
             with st.expander("Tabel sensor_log (200 data terakhir)"):
                 st.dataframe(df_s.tail(200), use_container_width=True)
