@@ -11,13 +11,13 @@ import paho.mqtt.client as mqtt
 # =========================
 # CONFIG (from secrets)
 # =========================
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://yhxbhhnumryhvmbqfydo.supabase.co")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_secret_ax95UAB1rgUpsaam3v-Q7w_RMsRCE7N")
 
-MQTT_BROKER = st.secrets.get("MQTT_BROKER", "")
+MQTT_BROKER = st.secrets.get("MQTT_BROKER", "9c50aa4767ef40c0bb562a0e1edf1547.s1.eu.hivemq.cloud")
 MQTT_PORT   = int(st.secrets.get("MQTT_PORT", 8883))
-MQTT_USER   = st.secrets.get("MQTT_USER", "")
-MQTT_PASS   = st.secrets.get("MQTT_PASS", "")
+MQTT_USER   = st.secrets.get("MQTT_USER", "patani")
+MQTT_PASS   = st.secrets.get("MQTT_PASS", "Patani11")
 
 TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd")
 
