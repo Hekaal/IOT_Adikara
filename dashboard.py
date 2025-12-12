@@ -1,4 +1,3 @@
-import json
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -11,7 +10,7 @@ import paho.mqtt.client as mqtt
 # CONFIG (Streamlit Secrets ONLY)
 # =========================================================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").strip()
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # gunakan ANON key (disarankan)
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # disarankan ANON key
 
 MQTT_BROKER = st.secrets.get("MQTT_BROKER", "").strip()
 MQTT_PORT   = int(st.secrets.get("MQTT_PORT", 8883))
@@ -23,28 +22,23 @@ TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd
 JAKARTA_TZ = timezone(timedelta(hours=7))
 
 # =========================================================
-# GUARD: fail fast kalau Supabase belum diisi
+# GUARD
 # =========================================================
+st.set_page_config(page_title="Adikara IoT Dashboard", layout="wide")
+st.title("Adikara IoT - Dashboard Sensor")
+
 if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
-    st.error(
-        "SUPABASE_URL kosong / tidak valid.\n"
-        "Isi di Streamlit Cloud → Settings → Secrets.\n"
-        "Contoh: https://xxxx.supabase.co"
-    )
+    st.error("SUPABASE_URL kosong/tidak valid. Isi di Streamlit Cloud → Settings → Secrets.")
     st.stop()
 
 if not SUPABASE_KEY:
-    st.error(
-        "SUPABASE_KEY kosong.\n"
-        "Isi di Streamlit Cloud → Settings → Secrets.\n"
-        "Disarankan pakai ANON key (bukan service role / sb_secret)."
-    )
+    st.error("SUPABASE_KEY kosong. Isi di Secrets. Disarankan pakai ANON key (bukan sb_secret/service role).")
     st.stop()
 
 MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
 
 # =========================================================
-# SUPABASE REST HELPERS
+# SUPABASE REST HELPERS (lebih informatif kalau error)
 # =========================================================
 def sb_headers():
     return {
@@ -59,8 +53,15 @@ def supabase_select(table: str, select="*", params=None):
     if params:
         q.update(params)
 
-    r = requests.get(url, headers=sb_headers(), params=q, timeout=20)
-    r.raise_for_status()
+    try:
+        r = requests.get(url, headers=sb_headers(), params=q, timeout=20)
+    except Exception as e:
+        raise RuntimeError(f"Request error ke Supabase: {e}")
+
+    if not r.ok:
+        # Biar kamu langsung tau: 401/403 (RLS), 404 (table), dll.
+        raise RuntimeError(f"Supabase HTTP {r.status_code}: {r.text}")
+
     return r.json()
 
 @st.cache_data(ttl=5)
@@ -75,6 +76,7 @@ def get_latest_sensor():
 @st.cache_data(ttl=10)
 def get_sensor_history(hours: int = 24):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
     rows = supabase_select(
         "sensor_log",
         select="id,created_at,temperature,humidity,soil,pump_status",
@@ -84,28 +86,16 @@ def get_sensor_history(hours: int = 24):
             "limit": "5000",
         },
     )
+
     df = pd.DataFrame(rows)
     if df.empty:
         return df
 
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert(JAKARTA_TZ)
+
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
 
-@st.cache_data(ttl=10)
-def get_vision_history(limit: int = 200):
-    rows = supabase_select(
-        "vision_log",
-        select="id,created_at,label,confidence,chat_id,raw_json",
-        params={"order": "created_at.desc", "limit": str(limit)},
-    )
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-
-    df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert(JAKARTA_TZ)
-    df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
     return df
 
 # =========================================================
@@ -113,7 +103,7 @@ def get_vision_history(limit: int = 200):
 # =========================================================
 def mqtt_publish_pump(cmd: str):
     if not MQTT_OK:
-        raise RuntimeError("MQTT config belum lengkap di Secrets (MQTT_BROKER/MQTT_USER/MQTT_PASS).")
+        raise RuntimeError("MQTT belum lengkap di Secrets (MQTT_BROKER/MQTT_USER/MQTT_PASS).")
 
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -130,17 +120,13 @@ def mqtt_publish_pump(cmd: str):
     client.disconnect()
 
 # =========================================================
-# UI
+# SIDEBAR
 # =========================================================
-st.set_page_config(page_title="Adikara IoT Dashboard", layout="wide")
-st.title("Adikara IoT - Smart Plant Doctor Dashboard")
-
 with st.sidebar:
     st.header("Pengaturan")
     auto_refresh = st.toggle("Auto refresh", value=True)
     refresh_sec = st.slider("Interval refresh (detik)", 2, 30, 5)
     hist_hours = st.slider("Rentang histori sensor (jam)", 1, 168, 24)
-    vision_limit = st.slider("Jumlah log vision", 50, 1000, 200)
 
     st.divider()
     st.subheader("Kontrol Pompa (MQTT)")
@@ -149,22 +135,21 @@ with st.sidebar:
         st.warning("MQTT belum dikonfigurasi. Kontrol pompa dimatikan (dashboard tetap jalan).")
     else:
         col_a, col_b, col_c = st.columns(3)
-
-        if col_a.button("PUMP ON", use_container_width=True):
+        if col_a.button("ON", use_container_width=True):
             try:
                 mqtt_publish_pump("ON")
                 st.success("Terkirim: ON")
             except Exception as e:
                 st.error(f"Gagal publish ON: {e}")
 
-        if col_b.button("PUMP OFF", use_container_width=True):
+        if col_b.button("OFF", use_container_width=True):
             try:
                 mqtt_publish_pump("OFF")
                 st.success("Terkirim: OFF")
             except Exception as e:
                 st.error(f"Gagal publish OFF: {e}")
 
-        if col_c.button("PUMP AUTO", use_container_width=True):
+        if col_c.button("AUTO", use_container_width=True):
             try:
                 mqtt_publish_pump("AUTO")
                 st.success("Terkirim: AUTO")
@@ -176,13 +161,13 @@ if auto_refresh:
     st.markdown(f"<meta http-equiv='refresh' content='{refresh_sec}'>", unsafe_allow_html=True)
 
 # =========================================================
-# KPI REALTIME
+# MAIN: KPI
 # =========================================================
 latest = None
 try:
     latest = get_latest_sensor()
 except Exception as e:
-    st.error(f"Gagal ambil latest sensor dari Supabase: {e}")
+    st.error(f"Gagal ambil latest sensor_log: {e}")
 
 k1, k2, k3, k4, k5 = st.columns([1, 1, 1, 1, 2])
 
@@ -194,12 +179,12 @@ if latest:
     k4.metric("Pompa", latest.get("pump_status", "--"))
     k5.metric("Update Terakhir (WIB)", ts.strftime("%Y-%m-%d %H:%M:%S"))
 else:
-    k5.info("Belum ada data di sensor_log atau gagal koneksi.")
+    k5.info("Belum ada data di sensor_log atau akses Supabase masih bermasalah.")
 
 st.divider()
 
 # =========================================================
-# GRAFIK SENSOR
+# HISTORI + RINGKASAN
 # =========================================================
 left, right = st.columns([2, 1])
 
@@ -208,7 +193,7 @@ with left:
     try:
         df_s = get_sensor_history(hist_hours)
         if df_s.empty:
-            st.info("Data histori sensor kosong.")
+            st.info("Data histori sensor kosong (atau query tidak dapat akses).")
         else:
             st.line_chart(df_s.set_index("created_at")[["temperature"]])
             st.line_chart(df_s.set_index("created_at")[["humidity"]])
@@ -217,7 +202,7 @@ with left:
             with st.expander("Tabel sensor_log (200 data terakhir)"):
                 st.dataframe(df_s.tail(200), use_container_width=True)
     except Exception as e:
-        st.error(f"Gagal load histori sensor: {e}")
+        st.error(f"Gagal load histori sensor_log: {e}")
 
 with right:
     st.subheader("Ringkasan")
@@ -239,35 +224,4 @@ with right:
     except Exception as e:
         st.error(f"Gagal hitung ringkasan: {e}")
 
-st.divider()
-
-# =========================================================
-# VISION LOG
-# =========================================================
-st.subheader("Log Deteksi Daun (vision_log)")
-try:
-    df_v = get_vision_history(vision_limit)
-    if df_v.empty:
-        st.info("Belum ada data di vision_log.")
-    else:
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.write("Top label:")
-            st.dataframe(df_v["label"].value_counts().head(10), use_container_width=True)
-        with c2:
-            st.write("Distribusi confidence:")
-            st.bar_chart(df_v["confidence"].dropna())
-
-        st.write("Data terbaru:")
-        view = df_v[["created_at", "label", "confidence", "chat_id"]].copy()
-        view["confidence_%"] = (view["confidence"] * 100).round(1)
-        st.dataframe(view.drop(columns=["confidence"]).head(200), use_container_width=True)
-
-        with st.expander("Raw JSON (10 data terbaru)"):
-            for _, row in df_v.head(10).iterrows():
-                st.write(f"{row['created_at']} | {row['label']} | {float(row['confidence'])*100:.1f}%")
-                st.code(json.dumps(row.get("raw_json", {}), indent=2, ensure_ascii=False), language="json")
-except Exception as e:
-    st.error(f"Gagal load vision_log: {e}")
-
-st.caption("Adikara IoT Dashboard - Supabase + MQTT")
+st.caption("Adikara IoT Dashboard - Sensor (Supabase) + Kontrol Pompa (MQTT)")
