@@ -79,7 +79,7 @@ def get_sensor_history(hours: int = 24):
 
     rows = supabase_select(
         "sensor_log",
-        select="id,ts,temperature,humidity,soil,pump_status",
+        df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ),
         params={
             "ts": f"gte.{since}",
             "order": "ts.asc",
