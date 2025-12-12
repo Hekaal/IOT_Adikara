@@ -5,14 +5,13 @@ from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 import streamlit as st
-
 import paho.mqtt.client as mqtt
 
-# =========================
-# CONFIG (from Streamlit Secrets ONLY)
-# =========================
+# =========================================================
+# CONFIG (Streamlit Secrets ONLY)
+# =========================================================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").strip()
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # gunakan ANON key
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # gunakan ANON key (disarankan)
 
 MQTT_BROKER = st.secrets.get("MQTT_BROKER", "").strip()
 MQTT_PORT   = int(st.secrets.get("MQTT_PORT", 8883))
@@ -23,23 +22,30 @@ TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd
 
 JAKARTA_TZ = timezone(timedelta(hours=7))
 
-# =========================
-# GUARD: stop early if config missing
-# =========================
+# =========================================================
+# GUARD: fail fast kalau Supabase belum diisi
+# =========================================================
 if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
-    st.error("SUPABASE_URL kosong/tidak valid. Isi di Streamlit Cloud → Settings → Secrets (wajib https://xxxx.supabase.co)")
+    st.error(
+        "SUPABASE_URL kosong / tidak valid.\n"
+        "Isi di Streamlit Cloud → Settings → Secrets.\n"
+        "Contoh: https://xxxx.supabase.co"
+    )
     st.stop()
 
 if not SUPABASE_KEY:
-    st.error("SUPABASE_KEY kosong. Isi di Secrets. Disarankan pakai ANON key (bukan sb_secret/service role).")
+    st.error(
+        "SUPABASE_KEY kosong.\n"
+        "Isi di Streamlit Cloud → Settings → Secrets.\n"
+        "Disarankan pakai ANON key (bukan service role / sb_secret)."
+    )
     st.stop()
 
 MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
 
-
-# =========================
-# Helpers: Supabase REST
-# =========================
+# =========================================================
+# SUPABASE REST HELPERS
+# =========================================================
 def sb_headers():
     return {
         "apikey": SUPABASE_KEY,
@@ -49,7 +55,11 @@ def sb_headers():
 
 def supabase_select(table: str, select="*", params=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    r = requests.get(url, headers=sb_headers(), params={"select": select, **(params or {})}, timeout=20)
+    q = {"select": select}
+    if params:
+        q.update(params)
+
+    r = requests.get(url, headers=sb_headers(), params=q, timeout=20)
     r.raise_for_status()
     return r.json()
 
@@ -77,6 +87,7 @@ def get_sensor_history(hours: int = 24):
     df = pd.DataFrame(rows)
     if df.empty:
         return df
+
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert(JAKARTA_TZ)
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -92,16 +103,17 @@ def get_vision_history(limit: int = 200):
     df = pd.DataFrame(rows)
     if df.empty:
         return df
+
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert(JAKARTA_TZ)
     df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
     return df
 
-# =========================
-# Helpers: MQTT publish
-# =========================
+# =========================================================
+# MQTT PUBLISH HELPER
+# =========================================================
 def mqtt_publish_pump(cmd: str):
-    if not (MQTT_BROKER and MQTT_USER and MQTT_PASS):
-        raise RuntimeError("MQTT config belum lengkap di secrets.")
+    if not MQTT_OK:
+        raise RuntimeError("MQTT config belum lengkap di Secrets (MQTT_BROKER/MQTT_USER/MQTT_PASS).")
 
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -110,16 +122,17 @@ def mqtt_publish_pump(cmd: str):
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=30)
     client.loop_start()
     time.sleep(0.2)
+
     info = client.publish(TOPIC_PUMP_CMD, cmd, qos=0, retain=False)
     info.wait_for_publish()
+
     client.loop_stop()
     client.disconnect()
 
-# =========================
+# =========================================================
 # UI
-# =========================
+# =========================================================
 st.set_page_config(page_title="Adikara IoT Dashboard", layout="wide")
-
 st.title("Adikara IoT - Smart Plant Doctor Dashboard")
 
 with st.sidebar:
@@ -131,45 +144,47 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Kontrol Pompa (MQTT)")
-    col_a, col_b, col_c = st.columns(3)
-    if col_a.button("PUMP ON", use_container_width=True):
-        try:
-            mqtt_publish_pump("ON")
-            st.success("Terkirim: ON")
-        except Exception as e:
-            st.error(f"Gagal publish ON: {e}")
 
-    if col_b.button("PUMP OFF", use_container_width=True):
-        try:
-            mqtt_publish_pump("OFF")
-            st.success("Terkirim: OFF")
-        except Exception as e:
-            st.error(f"Gagal publish OFF: {e}")
+    if not MQTT_OK:
+        st.warning("MQTT belum dikonfigurasi. Kontrol pompa dimatikan (dashboard tetap jalan).")
+    else:
+        col_a, col_b, col_c = st.columns(3)
 
-    if col_c.button("PUMP AUTO", use_container_width=True):
-        try:
-            mqtt_publish_pump("AUTO")
-            st.success("Terkirim: AUTO")
-        except Exception as e:
-            st.error(f"Gagal publish AUTO: {e}")
+        if col_a.button("PUMP ON", use_container_width=True):
+            try:
+                mqtt_publish_pump("ON")
+                st.success("Terkirim: ON")
+            except Exception as e:
+                st.error(f"Gagal publish ON: {e}")
+
+        if col_b.button("PUMP OFF", use_container_width=True):
+            try:
+                mqtt_publish_pump("OFF")
+                st.success("Terkirim: OFF")
+            except Exception as e:
+                st.error(f"Gagal publish OFF: {e}")
+
+        if col_c.button("PUMP AUTO", use_container_width=True):
+            try:
+                mqtt_publish_pump("AUTO")
+                st.success("Terkirim: AUTO")
+            except Exception as e:
+                st.error(f"Gagal publish AUTO: {e}")
 
 # Auto refresh
 if auto_refresh:
-    st.markdown(
-        f"<meta http-equiv='refresh' content='{refresh_sec}'>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"<meta http-equiv='refresh' content='{refresh_sec}'>", unsafe_allow_html=True)
 
-# =========================
-# Section: KPI realtime
-# =========================
+# =========================================================
+# KPI REALTIME
+# =========================================================
 latest = None
 try:
     latest = get_latest_sensor()
 except Exception as e:
     st.error(f"Gagal ambil latest sensor dari Supabase: {e}")
 
-k1, k2, k3, k4, k5 = st.columns([1,1,1,1,2])
+k1, k2, k3, k4, k5 = st.columns([1, 1, 1, 1, 2])
 
 if latest:
     ts = pd.to_datetime(latest["created_at"], utc=True).tz_convert(JAKARTA_TZ)
@@ -179,13 +194,13 @@ if latest:
     k4.metric("Pompa", latest.get("pump_status", "--"))
     k5.metric("Update Terakhir (WIB)", ts.strftime("%Y-%m-%d %H:%M:%S"))
 else:
-    k5.info("Belum ada data sensor_log atau gagal konek.")
+    k5.info("Belum ada data di sensor_log atau gagal koneksi.")
 
 st.divider()
 
-# =========================
-# Section: Grafik sensor
-# =========================
+# =========================================================
+# GRAFIK SENSOR
+# =========================================================
 left, right = st.columns([2, 1])
 
 with left:
@@ -199,20 +214,19 @@ with left:
             st.line_chart(df_s.set_index("created_at")[["humidity"]])
             st.line_chart(df_s.set_index("created_at")[["soil"]])
 
-            with st.expander("Tabel sensor_log (ringkas)"):
+            with st.expander("Tabel sensor_log (200 data terakhir)"):
                 st.dataframe(df_s.tail(200), use_container_width=True)
     except Exception as e:
         st.error(f"Gagal load histori sensor: {e}")
 
 with right:
-    st.subheader("Ringkasan 24 Jam")
+    st.subheader("Ringkasan")
     try:
         df_s = get_sensor_history(hist_hours)
         if not df_s.empty:
             st.write("Statistik:")
-            st.dataframe(df_s[["temperature","humidity","soil"]].describe().T, use_container_width=True)
+            st.dataframe(df_s[["temperature", "humidity", "soil"]].describe().T, use_container_width=True)
 
-            # Simple alert rules (boleh kamu ubah)
             st.write("Alert cepat:")
             soil_last = pd.to_numeric(latest.get("soil", None), errors="coerce") if latest else None
             if soil_last is not None and not pd.isna(soil_last):
@@ -227,16 +241,16 @@ with right:
 
 st.divider()
 
-# =========================
-# Section: Vision log
-# =========================
+# =========================================================
+# VISION LOG
+# =========================================================
 st.subheader("Log Deteksi Daun (vision_log)")
 try:
     df_v = get_vision_history(vision_limit)
     if df_v.empty:
-        st.info("Belum ada data vision_log.")
+        st.info("Belum ada data di vision_log.")
     else:
-        c1, c2 = st.columns([1,1])
+        c1, c2 = st.columns([1, 1])
         with c1:
             st.write("Top label:")
             st.dataframe(df_v["label"].value_counts().head(10), use_container_width=True)
@@ -245,11 +259,11 @@ try:
             st.bar_chart(df_v["confidence"].dropna())
 
         st.write("Data terbaru:")
-        view = df_v[["created_at","label","confidence","chat_id"]].copy()
+        view = df_v[["created_at", "label", "confidence", "chat_id"]].copy()
         view["confidence_%"] = (view["confidence"] * 100).round(1)
         st.dataframe(view.drop(columns=["confidence"]).head(200), use_container_width=True)
 
-        with st.expander("Lihat raw_json (10 data terbaru)"):
+        with st.expander("Raw JSON (10 data terbaru)"):
             for _, row in df_v.head(10).iterrows():
                 st.write(f"{row['created_at']} | {row['label']} | {float(row['confidence'])*100:.1f}%")
                 st.code(json.dumps(row.get("raw_json", {}), indent=2, ensure_ascii=False), language="json")
