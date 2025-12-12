@@ -9,19 +9,33 @@ import streamlit as st
 import paho.mqtt.client as mqtt
 
 # =========================
-# CONFIG (from secrets)
+# CONFIG (from Streamlit Secrets ONLY)
 # =========================
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://yhxbhhnumryhvmbqfydo.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_secret_ax95UAB1rgUpsaam3v-Q7w_RMsRCE7N")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "").strip()  # gunakan ANON key
 
-MQTT_BROKER = st.secrets.get("MQTT_BROKER", "9c50aa4767ef40c0bb562a0e1edf1547.s1.eu.hivemq.cloud")
+MQTT_BROKER = st.secrets.get("MQTT_BROKER", "").strip()
 MQTT_PORT   = int(st.secrets.get("MQTT_PORT", 8883))
-MQTT_USER   = st.secrets.get("MQTT_USER", "patani")
-MQTT_PASS   = st.secrets.get("MQTT_PASS", "Patani11")
+MQTT_USER   = st.secrets.get("MQTT_USER", "").strip()
+MQTT_PASS   = st.secrets.get("MQTT_PASS", "").strip()
 
-TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd")
+TOPIC_PUMP_CMD = st.secrets.get("TOPIC_PUMP_CMD", "adikara-iot/actuator/pump_cmd").strip()
 
 JAKARTA_TZ = timezone(timedelta(hours=7))
+
+# =========================
+# GUARD: stop early if config missing
+# =========================
+if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
+    st.error("SUPABASE_URL kosong/tidak valid. Isi di Streamlit Cloud → Settings → Secrets (wajib https://xxxx.supabase.co)")
+    st.stop()
+
+if not SUPABASE_KEY:
+    st.error("SUPABASE_KEY kosong. Isi di Secrets. Disarankan pakai ANON key (bukan sb_secret/service role).")
+    st.stop()
+
+MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
+
 
 # =========================
 # Helpers: Supabase REST
