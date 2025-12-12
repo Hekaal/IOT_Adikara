@@ -68,8 +68,8 @@ def supabase_select(table: str, select="*", params=None):
 def get_latest_sensor():
     rows = supabase_select(
         "sensor_log",
-        select="id,created_at,temperature,humidity,soil,pump_status",
-        params={"order": "created_at.desc", "limit": "1"},
+        select="id,ts,temperature,humidity,soil,pump_status",
+        params={"order": "ts.desc", "limit": "1"},
     )
     return rows[0] if rows else None
 
@@ -79,10 +79,10 @@ def get_sensor_history(hours: int = 24):
 
     rows = supabase_select(
         "sensor_log",
-        select="id,created_at,temperature,humidity,soil,pump_status",
+        select="id,ts,temperature,humidity,soil,pump_status",
         params={
-            "created_at": f"gte.{since}",
-            "order": "created_at.asc",
+            "ts": f"gte.{since}",
+            "order": "ts.asc",
             "limit": "5000",
         },
     )
@@ -91,12 +91,13 @@ def get_sensor_history(hours: int = 24):
     if df.empty:
         return df
 
-    df["created_at"] = pd.to_datetime(df["created_at"], utc=True).dt.tz_convert(JAKARTA_TZ)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
 
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     return df
+
 
 # =========================================================
 # MQTT PUBLISH HELPER
