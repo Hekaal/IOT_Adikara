@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import streamlit as st
 import paho.mqtt.client as mqtt
+import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
 # =========================================================
@@ -26,23 +27,23 @@ JAKARTA_TZ = timezone(timedelta(hours=7))
 # PAGE
 # =========================================================
 st.set_page_config(page_title="Adikara IoT Dashboard", layout="wide")
-st.title("Adikara IoT - Dashboard Sensor (Realtime)")
+st.title("Adikara IoT – Realtime Sensor Dashboard")
 
 # =========================================================
 # GUARD
 # =========================================================
 if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
-    st.error("SUPABASE_URL kosong/tidak valid. Isi di Streamlit Cloud → Settings → Secrets.")
+    st.error("SUPABASE_URL tidak valid. Isi di Streamlit Secrets.")
     st.stop()
 
 if not SUPABASE_KEY:
-    st.error("SUPABASE_KEY kosong. Isi di Secrets.")
+    st.error("SUPABASE_KEY kosong. Isi ANON key di Streamlit Secrets.")
     st.stop()
 
 MQTT_OK = all([MQTT_BROKER, MQTT_USER, MQTT_PASS])
 
 # =========================================================
-# SUPABASE REST HELPERS
+# SUPABASE REST
 # =========================================================
 def sb_headers():
     return {
@@ -75,7 +76,6 @@ def get_latest_sensor():
 def get_sensor_history(hours: int = 24):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
-    # 1) coba pakai filter waktu
     rows = supabase_select(
         "sensor_log",
         select="id,ts,temperature,humidity,soil,pump_status",
@@ -86,17 +86,14 @@ def get_sensor_history(hours: int = 24):
         },
     )
 
-    # 2) fallback: kalau kosong, ambil 500 data terakhir
+    # fallback jika kosong
     if not rows:
         rows = supabase_select(
             "sensor_log",
             select="id,ts,temperature,humidity,soil,pump_status",
-            params={
-                "order": "ts.desc",
-                "limit": "500",
-            },
+            params={"order": "ts.desc", "limit": "500"},
         )
-        rows = list(reversed(rows))  # biar jadi urut naik
+        rows = list(reversed(rows))
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -105,31 +102,29 @@ def get_sensor_history(hours: int = 24):
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+
     return df.sort_values("ts")
 
 # =========================================================
-# MQTT PUBLISH
+# MQTT
 # =========================================================
 def mqtt_publish_pump(cmd: str):
     if not MQTT_OK:
-        raise RuntimeError("MQTT belum lengkap di Secrets (MQTT_BROKER/MQTT_USER/MQTT_PASS).")
+        raise RuntimeError("MQTT belum lengkap di Secrets.")
 
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
     client.tls_set()
-
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=30)
     client.loop_start()
     time.sleep(0.2)
-
     info = client.publish(TOPIC_PUMP_CMD, cmd, qos=0, retain=False)
     info.wait_for_publish()
-
     client.loop_stop()
     client.disconnect()
 
 # =========================================================
-# SIDEBAR CONTROLS
+# SIDEBAR
 # =========================================================
 with st.sidebar:
     st.header("Realtime & Filter")
@@ -145,99 +140,96 @@ with st.sidebar:
     st.divider()
     st.subheader("Kontrol Pompa (MQTT)")
     if not MQTT_OK:
-        st.warning("MQTT belum dikonfigurasi. Kontrol pompa dimatikan.")
+        st.warning("MQTT belum dikonfigurasi.")
     else:
-        col_a, col_b, col_c = st.columns(3)
-        if col_a.button("ON", use_container_width=True):
-            try:
-                mqtt_publish_pump("ON")
-                st.success("Terkirim: ON")
-            except Exception as e:
-                st.error(f"Gagal publish ON: {e}")
-
-        if col_b.button("OFF", use_container_width=True):
-            try:
-                mqtt_publish_pump("OFF")
-                st.success("Terkirim: OFF")
-            except Exception as e:
-                st.error(f"Gagal publish OFF: {e}")
-
-        if col_c.button("AUTO", use_container_width=True):
-            try:
-                mqtt_publish_pump("AUTO")
-                st.success("Terkirim: AUTO")
-            except Exception as e:
-                st.error(f"Gagal publish AUTO: {e}")
+        col1, col2, col3 = st.columns(3)
+        if col1.button("ON", use_container_width=True):
+            mqtt_publish_pump("ON")
+        if col2.button("OFF", use_container_width=True):
+            mqtt_publish_pump("OFF")
+        if col3.button("AUTO", use_container_width=True):
+            mqtt_publish_pump("AUTO")
 
 # =========================================================
-# REALTIME LOOP (smooth rerun)
+# REALTIME LOOP (smooth)
 # =========================================================
 if realtime:
-    st_autorefresh(interval=refresh_sec * 1000, key="sensor_autorefresh")
+    st_autorefresh(interval=refresh_sec * 1000, key="realtime")
 
 # =========================================================
 # KPI
 # =========================================================
-latest = None
-try:
-    latest = get_latest_sensor()
-except Exception as e:
-    st.error(f"Gagal ambil latest sensor_log: {e}")
-
+latest = get_latest_sensor()
 k1, k2, k3, k4, k5 = st.columns([1, 1, 1, 1, 2])
 
 if latest:
     ts_last = pd.to_datetime(latest["ts"], utc=True).tz_convert(JAKARTA_TZ)
-    k1.metric("Suhu (C)", latest.get("temperature", "--"))
-    k2.metric("Kelembaban (%)", latest.get("humidity", "--"))
-    k3.metric("Kelembaban Tanah (%)", latest.get("soil", "--"))
+    k1.metric("Suhu (°C)", latest.get("temperature", "--"))
+    k2.metric("Humidity (%)", latest.get("humidity", "--"))
+    k3.metric("Soil (%)", latest.get("soil", "--"))
     k4.metric("Pompa", latest.get("pump_status", "--"))
-    k5.metric("Update Terakhir (WIB)", ts_last.strftime("%Y-%m-%d %H:%M:%S"))
+    k5.metric("Update Terakhir", ts_last.strftime("%Y-%m-%d %H:%M:%S"))
 else:
-    k5.info("Belum ada data di sensor_log atau akses Supabase bermasalah.")
+    k5.info("Belum ada data sensor.")
 
 st.divider()
 
 # =========================================================
-# HISTORI + RINGKASAN
+# PLOTLY DUAL AXIS (1 GRAFIK)
 # =========================================================
-left, right = st.columns([2, 1])
+st.subheader("Histori Sensor – Dual Axis")
 
-with left:
-    st.subheader("Histori Sensor")
-    try:
-        df_s = get_sensor_history(hist_hours)
-        if df_s.empty:
-            st.info("Data histori sensor kosong.")
-        else:
-            df_plot = df_s.set_index("ts")
-            st.line_chart(df_plot[["temperature"]])
-            st.line_chart(df_plot[["humidity"]])
-            st.line_chart(df_plot[["soil"]])
+df_s = get_sensor_history(hist_hours)
+if df_s.empty:
+    st.info("Data histori sensor kosong.")
+else:
+    fig = go.Figure()
 
-            with st.expander("Tabel sensor_log (200 data terakhir)"):
-                st.dataframe(df_s.tail(200), use_container_width=True)
-    except Exception as e:
-        st.error(f"Gagal load histori sensor_log: {e}")
+    fig.add_trace(go.Scatter(
+        x=df_s["ts"],
+        y=df_s["temperature"],
+        name="Temperature (°C)",
+        yaxis="y1",
+        mode="lines",
+        connectgaps=True,
+    ))
 
-with right:
-    st.subheader("Ringkasan")
-    try:
-        df_s = get_sensor_history(hist_hours)
-        if not df_s.empty:
-            st.write("Statistik:")
-            st.dataframe(df_s[["temperature", "humidity", "soil"]].describe().T, use_container_width=True)
+    fig.add_trace(go.Scatter(
+        x=df_s["ts"],
+        y=df_s["humidity"],
+        name="Humidity (%)",
+        yaxis="y2",
+        mode="lines",
+        connectgaps=True,
+    ))
 
-            st.write("Alert cepat:")
-            soil_last = pd.to_numeric(latest.get("soil", None), errors="coerce") if latest else None
-            if soil_last is not None and not pd.isna(soil_last):
-                if soil_last < 30:
-                    st.warning("Tanah cenderung kering (soil < 30%).")
-                elif soil_last > 80:
-                    st.info("Tanah sangat lembab (soil > 80%).")
-                else:
-                    st.success("Kelembaban tanah normal.")
-    except Exception as e:
-        st.error(f"Gagal hitung ringkasan: {e}")
+    fig.add_trace(go.Scatter(
+        x=df_s["ts"],
+        y=df_s["soil"],
+        name="Soil (%)",
+        yaxis="y2",
+        mode="lines",
+        connectgaps=True,
+    ))
 
-st.caption("Adikara IoT Dashboard - Sensor (Supabase) + Kontrol Pompa (MQTT)")
+    fig.update_layout(
+        height=450,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02),
+        xaxis=dict(title="Waktu (WIB)"),
+        yaxis=dict(title="Temperature (°C)"),
+        yaxis2=dict(
+            title="Humidity & Soil (%)",
+            overlaying="y",
+            side="right",
+            rangemode="tozero",
+        ),
+        margin=dict(l=40, r=40, t=40, b=40),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Tabel sensor_log (200 data terakhir)"):
+        st.dataframe(df_s.tail(200), use_container_width=True)
+
+st.caption("Adikara IoT Dashboard – Realtime, Dual-Axis, Supabase + MQTT")
