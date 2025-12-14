@@ -3,3 +3,4 @@ pandas
 requests
 paho-mqtt
 streamlit-autorefresh
+plotly
