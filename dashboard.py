@@ -73,7 +73,7 @@ def get_latest_sensor():
     return rows[0] if rows else None
 
 @st.cache_data(ttl=6)
-def get_sensor_history(hours: int = 24):
+def get_sensor_history(hours: int):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     rows = supabase_select(
@@ -86,12 +86,12 @@ def get_sensor_history(hours: int = 24):
         },
     )
 
-    # fallback jika kosong
+    # fallback kalau kosong
     if not rows:
         rows = supabase_select(
             "sensor_log",
             select="id,ts,temperature,humidity,soil,pump_status",
-            params={"order": "ts.desc", "limit": "500"},
+            params={"order": "ts.desc", "limit": "800"},
         )
         rows = list(reversed(rows))
 
@@ -127,10 +127,25 @@ def mqtt_publish_pump(cmd: str):
 # SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.header("Realtime & Filter")
+    st.header("Realtime & Rentang Data")
     realtime = st.toggle("Realtime ON", value=True)
     refresh_sec = st.slider("Update tiap (detik)", 2, 30, 5)
-    hist_hours = st.slider("Rentang histori (jam)", 1, 168, 24)
+
+    st.caption("Quick range (lebih enak daripada slider jam):")
+    quick = st.radio(
+        "Range",
+        options=["1 jam", "6 jam", "24 jam", "7 hari"],
+        index=2,
+        horizontal=True,
+    )
+    if quick == "1 jam":
+        hist_hours = 1
+    elif quick == "6 jam":
+        hist_hours = 6
+    elif quick == "24 jam":
+        hist_hours = 24
+    else:
+        hist_hours = 168
 
     st.divider()
     if st.button("🔄 Refresh Sekarang", use_container_width=True):
@@ -145,14 +160,15 @@ with st.sidebar:
         col1, col2, col3 = st.columns(3)
         if col1.button("ON", use_container_width=True):
             mqtt_publish_pump("ON")
+            st.success("Terkirim: ON")
         if col2.button("OFF", use_container_width=True):
             mqtt_publish_pump("OFF")
+            st.success("Terkirim: OFF")
         if col3.button("AUTO", use_container_width=True):
             mqtt_publish_pump("AUTO")
+            st.success("Terkirim: AUTO")
 
-# =========================================================
-# REALTIME LOOP (smooth)
-# =========================================================
+# realtime smooth
 if realtime:
     st_autorefresh(interval=refresh_sec * 1000, key="realtime")
 
@@ -175,61 +191,118 @@ else:
 st.divider()
 
 # =========================================================
-# PLOTLY DUAL AXIS (1 GRAFIK)
+# LOAD DF
 # =========================================================
-st.subheader("Histori Sensor – Dual Axis")
-
 df_s = get_sensor_history(hist_hours)
+
 if df_s.empty:
     st.info("Data histori sensor kosong.")
-else:
-    fig = go.Figure()
+    st.stop()
 
-    fig.add_trace(go.Scatter(
-        x=df_s["ts"],
-        y=df_s["temperature"],
-        name="Temperature (°C)",
-        yaxis="y1",
-        mode="lines",
-        connectgaps=True,
+# =========================================================
+# 1) OVERVIEW: Dual Axis (1 chart)
+# =========================================================
+st.subheader("Overview (1 Grafik) – Dual Axis")
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=df_s["ts"], y=df_s["temperature"],
+    name="Temperature (°C)",
+    yaxis="y1", mode="lines", connectgaps=True,
+))
+
+fig.add_trace(go.Scatter(
+    x=df_s["ts"], y=df_s["humidity"],
+    name="Humidity (%)",
+    yaxis="y2", mode="lines", connectgaps=True,
+))
+
+fig.add_trace(go.Scatter(
+    x=df_s["ts"], y=df_s["soil"],
+    name="Soil (%)",
+    yaxis="y2", mode="lines", connectgaps=True,
+))
+
+fig.update_layout(
+    height=460,
+    hovermode="x unified",
+    legend=dict(orientation="h", y=1.02),
+    xaxis=dict(title="Waktu (WIB)", rangeslider=dict(visible=True)),  # zoom
+    yaxis=dict(title="Temperature (°C)"),
+    yaxis2=dict(
+        title="Humidity & Soil (%)",
+        overlaying="y",
+        side="right",
+        rangemode="tozero",
+    ),
+    margin=dict(l=40, r=40, t=40, b=40),
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# =========================================================
+# 2) PER SENSOR: Chart terpisah (lebih jelas)
+# =========================================================
+st.subheader("Detail per Sensor (Grafik Terpisah)")
+
+cA, cB, cC = st.columns(3)
+
+with cA:
+    fig_t = go.Figure()
+    fig_t.add_trace(go.Scatter(
+        x=df_s["ts"], y=df_s["temperature"],
+        mode="lines", name="Temperature (°C)", connectgaps=True
     ))
-
-    fig.add_trace(go.Scatter(
-        x=df_s["ts"],
-        y=df_s["humidity"],
-        name="Humidity (%)",
-        yaxis="y2",
-        mode="lines",
-        connectgaps=True,
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=df_s["ts"],
-        y=df_s["soil"],
-        name="Soil (%)",
-        yaxis="y2",
-        mode="lines",
-        connectgaps=True,
-    ))
-
-    fig.update_layout(
-        height=450,
+    fig_t.update_layout(
+        height=320,
+        margin=dict(l=30, r=20, t=30, b=30),
         hovermode="x unified",
-        legend=dict(orientation="h", y=1.02),
-        xaxis=dict(title="Waktu (WIB)"),
-        yaxis=dict(title="Temperature (°C)"),
-        yaxis2=dict(
-            title="Humidity & Soil (%)",
-            overlaying="y",
-            side="right",
-            rangemode="tozero",
-        ),
-        margin=dict(l=40, r=40, t=40, b=40),
+        xaxis=dict(title="WIB"),
+        yaxis=dict(title="°C"),
+        title="Temperature"
     )
+    st.plotly_chart(fig_t, use_container_width=True)
 
-    st.plotly_chart(fig, use_container_width=True)
+with cB:
+    fig_h = go.Figure()
+    fig_h.add_trace(go.Scatter(
+        x=df_s["ts"], y=df_s["humidity"],
+        mode="lines", name="Humidity (%)", connectgaps=True
+    ))
+    fig_h.update_layout(
+        height=320,
+        margin=dict(l=30, r=20, t=30, b=30),
+        hovermode="x unified",
+        xaxis=dict(title="WIB"),
+        yaxis=dict(title="%"),
+        title="Humidity"
+    )
+    st.plotly_chart(fig_h, use_container_width=True)
 
-    with st.expander("Tabel sensor_log (200 data terakhir)"):
-        st.dataframe(df_s.tail(200), use_container_width=True)
+with cC:
+    fig_s = go.Figure()
+    fig_s.add_trace(go.Scatter(
+        x=df_s["ts"], y=df_s["soil"],
+        mode="lines", name="Soil (%)", connectgaps=True
+    ))
+    fig_s.update_layout(
+        height=320,
+        margin=dict(l=30, r=20, t=30, b=30),
+        hovermode="x unified",
+        xaxis=dict(title="WIB"),
+        yaxis=dict(title="%"),
+        title="Soil Moisture"
+    )
+    st.plotly_chart(fig_s, use_container_width=True)
 
-st.caption("Adikara IoT Dashboard – Realtime, Dual-Axis, Supabase + MQTT")
+st.divider()
+
+# =========================================================
+# TABLE
+# =========================================================
+with st.expander("Tabel sensor_log (200 data terakhir)"):
+    st.dataframe(df_s.tail(200), use_container_width=True)
+
+st.caption("Adikara IoT Dashboard – Overview + Detail per Sensor (Supabase + MQTT)")
