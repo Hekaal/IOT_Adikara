@@ -75,6 +75,7 @@ def get_latest_sensor():
 def get_sensor_history(hours: int = 24):
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
+    # 1) coba pakai filter waktu
     rows = supabase_select(
         "sensor_log",
         select="id,ts,temperature,humidity,soil,pump_status",
@@ -85,6 +86,18 @@ def get_sensor_history(hours: int = 24):
         },
     )
 
+    # 2) fallback: kalau kosong, ambil 500 data terakhir
+    if not rows:
+        rows = supabase_select(
+            "sensor_log",
+            select="id,ts,temperature,humidity,soil,pump_status",
+            params={
+                "order": "ts.desc",
+                "limit": "500",
+            },
+        )
+        rows = list(reversed(rows))  # biar jadi urut naik
+
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -92,7 +105,6 @@ def get_sensor_history(hours: int = 24):
     df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(JAKARTA_TZ)
     for c in ["temperature", "humidity", "soil"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-
     return df.sort_values("ts")
 
 # =========================================================
